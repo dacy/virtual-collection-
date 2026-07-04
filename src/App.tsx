@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { useRef } from 'react'
 import type { Mesh } from 'three'
+
+const SpikePage = lazy(() => import('./spike/SpikePage'))
 
 function useHashRoute(): string {
   const [route, setRoute] = useState(() => window.location.hash.slice(1) || '/')
@@ -39,6 +41,11 @@ function Home() {
         <p style={{ opacity: 0.6, marginTop: '0.5rem' }}>
           Your collection stays on your device — nothing is ever uploaded.
         </p>
+        <p style={{ marginTop: '1.5rem' }}>
+          <a href="#/spike" style={{ color: '#b08d57' }}>
+            Milestone 0: performance spike →
+          </a>
+        </p>
       </div>
     </div>
   )
@@ -46,6 +53,14 @@ function Home() {
 
 export function App() {
   const route = useHashRoute()
-  void route
+  if (route === '/spike') {
+    return (
+      <Suspense
+        fallback={<p style={{ padding: '2rem', opacity: 0.6 }}>Loading spike scene…</p>}
+      >
+        <SpikePage />
+      </Suspense>
+    )
+  }
   return <Home />
 }
