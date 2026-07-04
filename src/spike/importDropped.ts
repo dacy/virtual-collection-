@@ -56,6 +56,9 @@ export async function loadDroppedFile(
   }
 
   enableVertexColors(object)
+  object.traverse((node) => {
+    if ((node as Mesh).isMesh) node.castShadow = true
+  })
   return normalize(object, file.name)
 }
 

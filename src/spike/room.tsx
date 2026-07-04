@@ -20,6 +20,7 @@ import {
   type SpotLight as SpotLightImpl,
 } from 'three'
 import { mulberry32 } from './rng'
+import { AAA_FX } from './quality'
 
 export const ROOM = { width: 12, depth: 8, height: 3.6 }
 export const EYE_HEIGHT = 1.65
@@ -82,8 +83,10 @@ export const SLOTS: SpikeSlot[] = [
 export const PEDESTAL_SLOTS = SLOTS.filter((s) => s.kind === 'pedestal')
 
 // HDR (>1) colors so the bloom pass picks these up as light sources
-const COVE_HDR = new Color('#ffc98f').multiplyScalar(2.2)
+const COVE_HDR = new Color('#ffc98f').multiplyScalar(1.6)
 const FIXTURE_LENS_HDR = new Color('#ffe3c2').multiplyScalar(4)
+const SKY_HDR = new Color('#cfe6ff').multiplyScalar(2.6)
+const SUN_HDR = new Color('#fff3d2').multiplyScalar(18)
 
 /** y of the surface pieces actually stand on (top of the steel slab). */
 export const PEDESTAL_TOP = PEDESTAL.height + 0.026
@@ -95,12 +98,11 @@ export const COLLIDERS = PEDESTAL_SLOTS.map((s) => ({
   radius: PEDESTAL.size * 0.75 + 0.25,
 }))
 
-/** Studio-style light rig baked into the environment map: warm HDR ceiling
- *  strips, a cool and a warm side panel, and a floor-bounce card. This is
- *  what glass, steel, and glossy pieces actually reflect — much richer than
- *  three's neutral RoomEnvironment. Basic materials act as emitters in the
- *  PMREM bake; colors above 1.0 are intentional (HDR). */
-function makeGalleryEnvScene(): Scene {
+/** Daylight rig baked into the environment map: a big cool sky panel on the
+ *  window side, a small hot sun disc, bright shell, warm floor bounce.
+ *  This is what glass, steel, and glossy pieces reflect. Basic materials
+ *  act as emitters in the PMREM bake; colors above 1.0 are intentional. */
+function makeDaylightEnvScene(): Scene {
   const scene = new Scene()
   const emitter = (
     geometry: PlaneGeometry | BoxGeometry,
@@ -116,21 +118,17 @@ function makeGalleryEnvScene(): Scene {
 
   const shell = new Mesh(
     new BoxGeometry(20, 12, 20),
-    new MeshBasicMaterial({ color: new Color('#181a1e'), side: BackSide }),
+    new MeshBasicMaterial({ color: new Color('#c9c7c0'), side: BackSide }),
   )
   shell.position.y = 4
   scene.add(shell)
 
-  // warm overhead strips (the "track lighting" every glossy surface mirrors)
-  const warm = new Color('#ffd9ac').multiplyScalar(5)
-  for (const x of [-5, 0, 5]) {
-    emitter(new PlaneGeometry(3.2, 9), warm, [x, 9.8, 0], [Math.PI / 2, 0, 0])
-  }
-  // cool fill panel on one side, soft warm kicker on the other
-  emitter(new PlaneGeometry(7, 4.5), new Color('#a9c0dd').multiplyScalar(2), [-9.8, 4.5, 0], [0, Math.PI / 2, 0])
-  emitter(new PlaneGeometry(7, 4.5), new Color('#ffcf9e').multiplyScalar(1.4), [9.8, 4.5, 0], [0, -Math.PI / 2, 0])
-  // floor bounce
-  emitter(new PlaneGeometry(18, 18), new Color('#6e5c46').multiplyScalar(1.1), [0, -1.9, 0], [-Math.PI / 2, 0, 0])
+  // sky through the window wall + a hot sun disc
+  emitter(new PlaneGeometry(14, 6), new Color('#cfe6ff').multiplyScalar(3), [0, 5, 9.8], [0, Math.PI, 0])
+  emitter(new PlaneGeometry(2, 2), new Color('#fff3d2').multiplyScalar(22), [4, 7.5, 9.7], [0, Math.PI, 0])
+  // soft warm ceiling wash and floor bounce
+  emitter(new PlaneGeometry(8, 8), new Color('#fff0dc').multiplyScalar(1.6), [0, 9.8, 0], [Math.PI / 2, 0, 0])
+  emitter(new PlaneGeometry(18, 18), new Color('#b3a48f').multiplyScalar(1.2), [0, -1.9, 0], [-Math.PI / 2, 0, 0])
 
   return scene
 }
@@ -140,9 +138,9 @@ export function EnvironmentLight() {
   const scene = useThree((s) => s.scene)
   useEffect(() => {
     const pmrem = new PMREMGenerator(gl)
-    const env = pmrem.fromScene(makeGalleryEnvScene(), 0.035).texture
+    const env = pmrem.fromScene(makeDaylightEnvScene(), 0.035).texture
     scene.environment = env
-    scene.environmentIntensity = 0.5
+    scene.environmentIntensity = 0.6
     return () => {
       scene.environment = null
       scene.environmentIntensity = 1
@@ -252,7 +250,7 @@ function DisplaySpots() {
           key={`spot_${s.id}`}
           position={[s.position[0], ROOM.height - 0.14, s.position[2]]}
           target={[s.position[0], PEDESTAL.height, s.position[2]]}
-          intensity={22}
+          intensity={14}
           angle={0.62}
         />
       ))}
@@ -263,7 +261,7 @@ function DisplaySpots() {
             key={`spot_${s.id}`}
             position={[s.position[0], ROOM.height - 0.14, s.position[2] + inward * 1.3]}
             target={[s.position[0], s.position[1], s.position[2]]}
-            intensity={22}
+            intensity={12}
             angle={0.42}
           />
         )
@@ -283,21 +281,20 @@ function Pedestals({ onPedestalClick }: { onPedestalClick?: (slotIndex: number) 
   const n = PEDESTAL_SLOTS.length
 
   useLayoutEffect(() => {
+    // makeTranslation resets the whole matrix each time — setPosition would
+    // keep a previously composed rotation and topple every later instance
     const m = new Matrix4()
+    const lensM = new Matrix4()
     const faceDown = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2)
     const one = new Vector3(1, 1, 1)
     PEDESTAL_SLOTS.forEach((s, i) => {
       const [x, , z] = s.position
-      m.setPosition(x, PEDESTAL.height / 2, z)
-      body.current!.setMatrixAt(i, m)
-      m.setPosition(x, PEDESTAL.height + 0.012, z)
-      slab.current!.setMatrixAt(i, m)
-      m.setPosition(x, PEDESTAL.height - 0.03, z)
-      strip.current!.setMatrixAt(i, m)
-      m.setPosition(x, ROOM.height - 0.07, z)
-      fixture.current!.setMatrixAt(i, m)
-      m.compose(new Vector3(x, ROOM.height - 0.142, z), faceDown, one)
-      lens.current!.setMatrixAt(i, m)
+      body.current!.setMatrixAt(i, m.makeTranslation(x, PEDESTAL.height / 2, z))
+      slab.current!.setMatrixAt(i, m.makeTranslation(x, PEDESTAL.height + 0.012, z))
+      strip.current!.setMatrixAt(i, m.makeTranslation(x, PEDESTAL.height - 0.03, z))
+      fixture.current!.setMatrixAt(i, m.makeTranslation(x, ROOM.height - 0.07, z))
+      lensM.compose(new Vector3(x, ROOM.height - 0.142, z), faceDown, one)
+      lens.current!.setMatrixAt(i, lensM)
     })
     for (const ref of [body, slab, strip, fixture, lens]) {
       ref.current!.instanceMatrix.needsUpdate = true
@@ -320,15 +317,19 @@ function Pedestals({ onPedestalClick }: { onPedestalClick?: (slotIndex: number) 
         args={[undefined, undefined, n]}
         onClick={click}
         userData={{ pedestalInstance: true }}
+        castShadow
+        receiveShadow
       >
         <boxGeometry args={[PEDESTAL.size, PEDESTAL.height, PEDESTAL.size]} />
-        <meshStandardMaterial color="#212226" roughness={0.35} metalness={0.15} />
+        <meshStandardMaterial color="#e2dfd8" roughness={0.55} metalness={0.02} />
       </instancedMesh>
       <instancedMesh
         ref={slab}
         args={[undefined, undefined, n]}
         onClick={click}
         userData={{ pedestalInstance: true }}
+        castShadow
+        receiveShadow
       >
         <boxGeometry args={[PEDESTAL.size + 0.05, 0.024, PEDESTAL.size + 0.05]} />
         <meshStandardMaterial color="#8d9094" roughness={0.35} metalness={0.85} />
@@ -360,28 +361,62 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
   return (
     <group>
       {/* polished marble floor — low roughness so the IBL gives it sheen */}
-      <mesh rotation-x={-Math.PI / 2}>
+      <mesh rotation-x={-Math.PI / 2} receiveShadow>
         <planeGeometry args={[width, depth]} />
         <meshStandardMaterial map={floorMap} roughness={0.22} metalness={0.05} />
       </mesh>
 
-      {/* deep charcoal-green gallery walls */}
-      <mesh position={[0, height / 2, -depth / 2]}>
+      {/* warm gallery-white walls; the south wall carries the clerestory */}
+      <mesh position={[0, height / 2, -depth / 2]} receiveShadow>
         <planeGeometry args={[width, height]} />
-        <meshStandardMaterial color="#272c2b" roughness={0.85} />
+        <meshStandardMaterial color="#e8e3d9" roughness={0.85} />
       </mesh>
-      <mesh position={[0, height / 2, depth / 2]} rotation-y={Math.PI}>
-        <planeGeometry args={[width, height]} />
-        <meshStandardMaterial color="#272c2b" roughness={0.85} />
-      </mesh>
-      <mesh position={[-width / 2, height / 2, 0]} rotation-y={Math.PI / 2}>
+      <mesh position={[-width / 2, height / 2, 0]} rotation-y={Math.PI / 2} receiveShadow>
         <planeGeometry args={[depth, height]} />
-        <meshStandardMaterial color="#232827" roughness={0.85} />
+        <meshStandardMaterial color="#e3ded4" roughness={0.85} />
       </mesh>
-      <mesh position={[width / 2, height / 2, 0]} rotation-y={-Math.PI / 2}>
+      <mesh position={[width / 2, height / 2, 0]} rotation-y={-Math.PI / 2} receiveShadow>
         <planeGeometry args={[depth, height]} />
-        <meshStandardMaterial color="#232827" roughness={0.85} />
+        <meshStandardMaterial color="#e3ded4" roughness={0.85} />
       </mesh>
+
+      {/* south wall: solid below, clerestory ribbon windows above letting
+          the sun in, header on top; sky + sun visible outside */}
+      <group>
+        <mesh position={[0, 1.15, depth / 2 + 0.075]} receiveShadow>
+          <boxGeometry args={[width, 2.3, 0.15]} />
+          <meshStandardMaterial color="#e8e3d9" roughness={0.85} />
+        </mesh>
+        <mesh position={[0, 3.45, depth / 2 + 0.075]}>
+          <boxGeometry args={[width, 0.3, 0.15]} />
+          <meshStandardMaterial color="#e8e3d9" roughness={0.85} />
+        </mesh>
+        {[-5.7, 5.7].map((x) => (
+          <mesh key={`wend${x}`} position={[x, 2.8, depth / 2 + 0.075]}>
+            <boxGeometry args={[0.6, 1.0, 0.15]} />
+            <meshStandardMaterial color="#e8e3d9" roughness={0.85} />
+          </mesh>
+        ))}
+        {[-1.8, 1.8].map((x) => (
+          <mesh key={`wpil${x}`} position={[x, 2.8, depth / 2 + 0.075]}>
+            <boxGeometry args={[0.24, 1.0, 0.15]} />
+            <meshStandardMaterial color="#f2efe8" roughness={0.7} />
+          </mesh>
+        ))}
+        <mesh position={[0, 2.33, depth / 2 + 0.06]}>
+          <boxGeometry args={[width - 1.0, 0.06, 0.22]} />
+          <meshStandardMaterial color="#f2efe8" roughness={0.7} />
+        </mesh>
+        {/* the outdoors: HDR sky sheet and sun disc (bloom catches both) */}
+        <mesh position={[0, 3, depth / 2 + 2.2]} rotation-y={Math.PI}>
+          <planeGeometry args={[17, 7]} />
+          <meshBasicMaterial color={SKY_HDR} />
+        </mesh>
+        <mesh position={[4, 5.4, depth / 2 + 2.1]} rotation-y={Math.PI}>
+          <circleGeometry args={[0.7, 24]} />
+          <meshBasicMaterial color={SUN_HDR} />
+        </mesh>
+      </group>
 
       {/* baseboards and a brass chair rail on all four walls */}
       {([
@@ -393,7 +428,7 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
         <group key={i} position={[x, 0, z]} rotation-y={rot}>
           <mesh position-y={0.06}>
             <boxGeometry args={[len, 0.12, 0.03]} />
-            <meshStandardMaterial color="#121314" roughness={0.5} />
+            <meshStandardMaterial color="#f2efe8" roughness={0.6} />
           </mesh>
           <mesh position-y={1.02}>
             <boxGeometry args={[len, 0.028, 0.028]} />
@@ -402,21 +437,21 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
         </group>
       ))}
 
-      {/* coffered ceiling: dark field, beam grid, warm cove strips */}
+      {/* coffered ceiling: bright field, white beam grid, warm cove strips */}
       <mesh rotation-x={Math.PI / 2} position={[0, height, 0]}>
         <planeGeometry args={[width, depth]} />
-        <meshStandardMaterial color="#17181a" roughness={0.95} />
+        <meshStandardMaterial color="#f4f2ec" roughness={0.95} />
       </mesh>
       {[-3, -1.5, 0, 1.5, 3].map((z) => (
         <mesh key={`bx${z}`} position={[0, height - 0.09, z]}>
           <boxGeometry args={[width, 0.18, 0.22]} />
-          <meshStandardMaterial color="#101214" roughness={0.9} />
+          <meshStandardMaterial color="#e7e4dc" roughness={0.9} />
         </mesh>
       ))}
       {[-4.5, -1.5, 1.5, 4.5].map((x) => (
         <mesh key={`bz${x}`} position={[x, height - 0.09, 0]}>
           <boxGeometry args={[0.22, 0.18, depth]} />
-          <meshStandardMaterial color="#101214" roughness={0.9} />
+          <meshStandardMaterial color="#e7e4dc" roughness={0.9} />
         </mesh>
       ))}
       {([
@@ -447,11 +482,25 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
 
       <Pedestals onPedestalClick={onPedestalClick} />
 
-      {/* cinematic lighting: one soft warm spot per display as key, and a
-          hemisphere fill whose warm ground color plays the light bouncing
-          up off the marble floor and steel slabs — lifts the undersides
-          without per-pedestal uplights */}
-      <hemisphereLight color="#aebdd2" groundColor="#d9c5a3" intensity={0.55} />
+      {/* daylight: warm sun through the clerestory (one static shadow map,
+          re-baked only when pieces change), bright sky hemisphere with a
+          warm floor-bounce ground color, plus soft display spots as accent */}
+      <directionalLight
+        position={[4, 7.5, 9]}
+        color="#fff1da"
+        intensity={3.2}
+        castShadow={AAA_FX}
+        shadow-mapSize={[2048, 2048]}
+        shadow-camera-left={-9}
+        shadow-camera-right={9}
+        shadow-camera-top={9}
+        shadow-camera-bottom={-9}
+        shadow-camera-near={1}
+        shadow-camera-far={30}
+        shadow-bias={-0.0003}
+        shadow-normalBias={0.03}
+      />
+      <hemisphereLight color="#dfe9f3" groundColor="#d6c9b2" intensity={0.65} />
       <DisplaySpots />
     </group>
   )

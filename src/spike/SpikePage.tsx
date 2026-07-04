@@ -21,15 +21,13 @@ import {
   WALL_FIT_BOX,
 } from './room'
 import { WalkControls } from './WalkControls'
+import { AAA_FX } from './quality'
 import { emptyStats, StatsCollector, StatsOverlay, type SpikeStats } from './stats'
 
 const params = new URLSearchParams(window.location.search)
 const TEX_SIZE = Number(params.get('tex')) || 2048
 const SLOT_LIMIT = Math.min(Number(params.get('pieces')) || SLOTS.length, SLOTS.length)
 const PEDESTAL_SLOT_COUNT = PEDESTAL_SLOTS.length
-/** AAA post stack (AO, bloom, vignette) — desktop by default, ?fx=off to
- *  A/B the cost in the overlay, phones skip it entirely. */
-const AAA_FX = !('ontouchstart' in window) && params.get('fx') !== 'off'
 
 /** Per-slot manual placement tweaks, the same knobs the v1 slot editor
  *  will expose (rotationY, scaleAdjust, offsetY per the spec data model),
@@ -47,7 +45,7 @@ function makeContactShadowTexture(): CanvasTexture {
   c.width = c.height = 256
   const ctx = c.getContext('2d')!
   const g = ctx.createRadialGradient(128, 128, 8, 128, 128, 128)
-  g.addColorStop(0, 'rgba(0,0,0,0.45)')
+  g.addColorStop(0, 'rgba(0,0,0,0.3)')
   g.addColorStop(1, 'rgba(0,0,0,0)')
   ctx.fillStyle = g
   ctx.fillRect(0, 0, 256, 256)
@@ -69,6 +67,17 @@ function slotFromHit(hit: Intersection): number | null {
 }
 
 const SCREEN_CENTER = new Vector2(0, 0)
+
+/** The sun and room are static, so the shadow map is baked once and only
+ *  re-rendered when this component re-commits — i.e. whenever the page
+ *  re-renders because pieces or placements changed. */
+function ShadowRefresh() {
+  const gl = useThree((s) => s.gl)
+  useEffect(() => {
+    gl.shadowMap.needsUpdate = true
+  })
+  return null
+}
 
 /** Walk-mode editing entry point: while pointer-locked, a click raycasts
  *  from the screen-center dot; hitting a piece or pedestal opens the edit
@@ -276,9 +285,13 @@ export default function SpikePage() {
         dpr={Math.min(window.devicePixelRatio, 2)}
         camera={{ fov: 70, near: 0.05, far: 60 }}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
+        shadows={AAA_FX}
         onCreated={(state) => {
           rendererRef.current = state.gl
-          state.gl.toneMappingExposure = 1.15
+          state.gl.toneMappingExposure = 1.1
+          // static sun: bake the shadow map on demand, not every frame
+          state.gl.shadowMap.autoUpdate = false
+          state.gl.shadowMap.needsUpdate = true
         }}
         onPointerMissed={() => {
           if (mode === 'edit') setSelected(null)
@@ -322,6 +335,7 @@ export default function SpikePage() {
                   <mesh
                     geometry={piece.geometry}
                     scale={piece.scale * adj.scaleAdjust}
+                    castShadow
                     position-y={
                       isPedestal
                         ? PEDESTAL_TOP + piece.yOffset * adj.scaleAdjust + adj.offsetY
@@ -369,6 +383,7 @@ export default function SpikePage() {
         <WalkControls pointerLockEnabled={mode === 'walk'} />
         <ReticlePicker onPick={onReticlePick} />
         <StatsCollector out={statsRef} />
+        {AAA_FX && <ShadowRefresh />}
         {AAA_FX && (
           <EffectComposer multisampling={4}>
             <N8AO aoRadius={0.35} intensity={3.5} halfRes />
