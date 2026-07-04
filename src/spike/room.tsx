@@ -110,7 +110,11 @@ function makeFloorTexture(): CanvasTexture {
   return tex
 }
 
-export function Room() {
+export function Room({
+  onPedestalClick,
+}: {
+  onPedestalClick?: (slotIndex: number) => void
+}) {
   const floorMap = useMemo(makeFloorTexture, [])
   const { width, depth, height } = ROOM
   return (
@@ -142,7 +146,17 @@ export function Room() {
       </mesh>
       {/* pedestals */}
       {SLOTS.filter((s) => s.kind === 'pedestal').map((s) => (
-        <mesh key={s.id} position={[s.position[0], PEDESTAL.height / 2, s.position[2]]}>
+        <mesh
+          key={s.id}
+          position={[s.position[0], PEDESTAL.height / 2, s.position[2]]}
+          onClick={
+            onPedestalClick &&
+            ((e) => {
+              e.stopPropagation()
+              onPedestalClick(SLOTS.indexOf(s))
+            })
+          }
+        >
           <boxGeometry args={[PEDESTAL.size, PEDESTAL.height, PEDESTAL.size]} />
           <meshStandardMaterial color="#2e2e33" roughness={0.4} metalness={0.1} />
         </mesh>

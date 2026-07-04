@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, expect, it } from 'vitest'
-import { Box3, Vector3 } from 'three'
-import { loadDroppedFile } from './importDropped'
+import { Box3, Vector3, type Mesh, type MeshStandardMaterial } from 'three'
+import { injectPolypaint, loadDroppedFile } from './importDropped'
 
-// jsdom's File is missing arrayBuffer(); real browsers have it
+// jsdom's File is missing arrayBuffer()/text(); real browsers have them
 beforeAll(() => {
   if (!File.prototype.arrayBuffer) {
     File.prototype.arrayBuffer = function (this: File) {
@@ -12,6 +12,16 @@ beforeAll(() => {
         reader.onload = () => resolve(reader.result as ArrayBuffer)
         reader.onerror = () => reject(reader.error)
         reader.readAsArrayBuffer(this)
+      })
+    }
+  }
+  if (!File.prototype.text) {
+    File.prototype.text = function (this: File) {
+      return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(reader.error)
+        reader.readAsText(this)
       })
     }
   }
@@ -58,5 +68,46 @@ describe('loadDroppedFile', () => {
     new DataView(empty).setUint32(80, 0, true)
     const file = new File([empty], 'empty.stl')
     await expect(loadDroppedFile(file)).rejects.toThrow(/no geometry/i)
+  })
+})
+
+// ZBrush polypaint OBJ: one red, one green, one blue vertex
+const POLYPAINT_OBJ = `# exported from zbrush
+#MRGB 3
+#MRGB ffff0000ff00ff00ff0000ff
+v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+`
+
+describe('polypaint (ZBrush #MRGB vertex colors)', () => {
+  it('rewrites #MRGB blocks into extended vertex lines, sRGB→linear', () => {
+    const out = injectPolypaint(POLYPAINT_OBJ)
+    const vLines = out.split('\n').filter((l) => l.startsWith('v '))
+    expect(vLines[0]).toBe('v 0 0 0 1.00000 0.00000 0.00000')
+    expect(vLines[1]).toBe('v 1 0 0 0.00000 1.00000 0.00000')
+    expect(vLines[2]).toBe('v 0 1 0 0.00000 0.00000 1.00000')
+  })
+
+  it('leaves OBJ untouched when there is no polypaint', () => {
+    const plain = 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'
+    expect(injectPolypaint(plain)).toBe(plain)
+  })
+
+  it('produces a colored, vertexColors-enabled mesh through the full import', async () => {
+    const file = new File([POLYPAINT_OBJ], 'painted.obj')
+    const piece = await loadDroppedFile(file)
+    let checked = 0
+    piece.object.traverse((node) => {
+      const mesh = node as Mesh
+      if (!mesh.isMesh) return
+      checked += 1
+      expect(mesh.geometry.attributes.color).toBeDefined()
+      const mat = mesh.material as MeshStandardMaterial
+      expect(mat.vertexColors).toBe(true)
+      expect(mat.color.getHexString()).toBe('ffffff')
+    })
+    expect(checked).toBeGreaterThan(0)
   })
 })

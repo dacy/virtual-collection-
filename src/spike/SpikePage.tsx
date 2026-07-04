@@ -12,6 +12,15 @@ const TEX_SIZE = Number(params.get('tex')) || 2048
 const SLOT_LIMIT = Math.min(Number(params.get('pieces')) || SLOTS.length, SLOTS.length)
 const PEDESTAL_SLOT_COUNT = SLOTS.filter((s) => s.kind === 'pedestal').length
 
+/** Per-slot manual placement tweaks, the same knobs the v1 slot editor
+ *  will expose (rotationY, scaleAdjust, offsetY per the spec data model). */
+interface Placement {
+  rotationY: number
+  scaleAdjust: number
+  offsetY: number
+}
+const DEFAULT_PLACEMENT: Placement = { rotationY: 0, scaleAdjust: 1, offsetY: 0 }
+
 function makeContactShadowTexture(): CanvasTexture {
   const c = document.createElement('canvas')
   c.width = c.height = 256
@@ -31,13 +40,16 @@ function makeContactShadowTexture(): CanvasTexture {
  * live budget meter. Tune with ?tex=1024 and ?pieces=N.
  *
  * Drop your own GLB/GLTF/FBX/OBJ/STL files (or use the button) to replace
- * the stand-ins pedestal by pedestal and measure your real collection.
+ * the stand-ins pedestal by pedestal; Edit mode adjusts placement.
  */
 export default function SpikePage() {
   const [pieces, setPieces] = useState<StressPiece[]>([])
   const [dropped, setDropped] = useState<ReadonlyArray<DroppedPiece | null>>(() =>
     new Array<DroppedPiece | null>(SLOTS.length).fill(null),
   )
+  const [placements, setPlacements] = useState<Record<number, Placement>>({})
+  const [mode, setMode] = useState<'walk' | 'edit'>('walk')
+  const [selected, setSelected] = useState<number | null>(null)
   const [messages, setMessages] = useState<string[]>([])
   const nextDropSlot = useRef(0)
   const rendererRef = useRef<WebGLRenderer>()
@@ -99,7 +111,10 @@ export default function SpikePage() {
             next[slot] = piece
             return next
           })
-          note(`${file.name}: ${(piece.triangles / 1000).toFixed(0)}k triangles → pedestal ${slot + 1}`)
+          setPlacements((prev) => ({ ...prev, [slot]: DEFAULT_PLACEMENT }))
+          note(
+            `${file.name}: ${(piece.triangles / 1000).toFixed(0)}k triangles → pedestal ${slot + 1}`,
+          )
         } catch (err) {
           note(err instanceof Error ? err.message : String(err))
         }
@@ -116,6 +131,61 @@ export default function SpikePage() {
     [importFiles],
   )
 
+  const updatePlacement = useCallback(
+    (slot: number, patch: Partial<Placement>) => {
+      setPlacements((prev) => ({
+        ...prev,
+        [slot]: { ...(prev[slot] ?? DEFAULT_PLACEMENT), ...patch },
+      }))
+    },
+    [],
+  )
+
+  /** Move the selected dropped piece to another pedestal (swap if taken). */
+  const movePiece = useCallback((from: number, to: number) => {
+    if (from === to) return
+    setDropped((prev) => {
+      const next = [...prev]
+      ;[next[from], next[to]] = [next[to], next[from]]
+      return next
+    })
+    setPlacements((prev) => ({
+      ...prev,
+      [from]: prev[to] ?? DEFAULT_PLACEMENT,
+      [to]: prev[from] ?? DEFAULT_PLACEMENT,
+    }))
+    setSelected(to)
+  }, [])
+
+  const removePiece = useCallback((slot: number) => {
+    setDropped((prev) => {
+      const piece = prev[slot]
+      if (!piece) return prev
+      disposeObject(piece.object)
+      const next = [...prev]
+      next[slot] = null
+      return next
+    })
+    setSelected(null)
+  }, [])
+
+  const onPedestalClick = useCallback(
+    (slotIndex: number) => {
+      if (mode !== 'edit') return
+      if (selected !== null && dropped[selected] && slotIndex !== selected) {
+        movePiece(selected, slotIndex)
+      } else {
+        setSelected(slotIndex)
+      }
+    },
+    [mode, selected, dropped, movePiece],
+  )
+
+  const toggleMode = useCallback(() => {
+    setMode((m) => (m === 'walk' ? 'edit' : 'walk'))
+    setSelected(null)
+  }, [])
+
   return (
     <div
       style={{ height: '100%', position: 'relative' }}
@@ -129,46 +199,201 @@ export default function SpikePage() {
         onCreated={(state) => {
           rendererRef.current = state.gl
         }}
+        onPointerMissed={() => {
+          if (mode === 'edit') setSelected(null)
+        }}
       >
         <EnvironmentLight />
-        <Room />
+        <Room onPedestalClick={onPedestalClick} />
         {pieces.map((piece, i) => {
           const slot = slots[i]
           const [x, y, z] = slot.position
           const droppedHere = dropped[i]
+          const adj = placements[i] ?? DEFAULT_PLACEMENT
+          const selectable = mode === 'edit' && slot.kind === 'pedestal'
           return (
             <group key={slot.id} position={[x, y, z]} rotation-y={slot.rotationY}>
-              {droppedHere ? (
-                <primitive
-                  object={droppedHere.object}
-                  scale={PEDESTAL.fitBox}
-                  position-y={PEDESTAL.height}
-                />
-              ) : (
-                <mesh
-                  geometry={piece.geometry}
-                  scale={piece.scale}
-                  position-y={
-                    piece.kind === 'pedestal' ? PEDESTAL.height + piece.yOffset : undefined
-                  }
-                >
-                  <meshStandardMaterial map={piece.map} roughness={0.5} envMapIntensity={0.9} />
-                </mesh>
-              )}
+              <group
+                rotation-y={adj.rotationY}
+                onClick={
+                  selectable
+                    ? (e) => {
+                        e.stopPropagation()
+                        onPedestalClick(i)
+                      }
+                    : undefined
+                }
+              >
+                {droppedHere ? (
+                  <primitive
+                    object={droppedHere.object}
+                    scale={PEDESTAL.fitBox * adj.scaleAdjust}
+                    position-y={PEDESTAL.height + adj.offsetY}
+                  />
+                ) : (
+                  <mesh
+                    geometry={piece.geometry}
+                    scale={piece.scale * adj.scaleAdjust}
+                    position-y={
+                      piece.kind === 'pedestal'
+                        ? PEDESTAL.height + piece.yOffset * adj.scaleAdjust + adj.offsetY
+                        : undefined
+                    }
+                  >
+                    <meshStandardMaterial map={piece.map} roughness={0.5} envMapIntensity={0.9} />
+                  </mesh>
+                )}
+              </group>
               {slot.kind === 'pedestal' && (
                 <mesh rotation-x={-Math.PI / 2} position-y={PEDESTAL.height + 0.005}>
                   <planeGeometry args={[PEDESTAL.fitBox * 1.6, PEDESTAL.fitBox * 1.6]} />
                   <meshBasicMaterial map={shadowMap} transparent depthWrite={false} />
                 </mesh>
               )}
+              {selected === i && (
+                <mesh rotation-x={-Math.PI / 2} position-y={PEDESTAL.height + 0.01}>
+                  <ringGeometry args={[PEDESTAL.fitBox * 0.62, PEDESTAL.fitBox * 0.72, 48]} />
+                  <meshBasicMaterial color="#b08d57" transparent opacity={0.9} depthWrite={false} />
+                </mesh>
+              )}
             </group>
           )
         })}
-        <WalkControls />
+        <WalkControls pointerLockEnabled={mode === 'walk'} />
         <StatsCollector out={statsRef} />
       </Canvas>
       <StatsOverlay statsRef={statsRef} pieceCount={pieces.length} totalPieces={slots.length} />
+      <ModeToggle mode={mode} onToggle={toggleMode} />
+      {mode === 'edit' && (
+        <EditPanel
+          selected={selected}
+          isDropped={selected !== null && !!dropped[selected]}
+          pieceName={selected !== null ? dropped[selected]?.name : undefined}
+          placement={selected !== null ? (placements[selected] ?? DEFAULT_PLACEMENT) : null}
+          onChange={(patch) => selected !== null && updatePlacement(selected, patch)}
+          onRemove={() => selected !== null && removePiece(selected)}
+        />
+      )}
       <DropPanel messages={messages} onFiles={importFiles} />
+    </div>
+  )
+}
+
+const panelStyle: React.CSSProperties = {
+  background: 'rgba(10,10,14,0.82)',
+  borderRadius: 8,
+  fontFamily: 'ui-monospace, monospace',
+  fontSize: 13,
+  padding: '10px 14px',
+}
+
+function ModeToggle({ mode, onToggle }: { mode: 'walk' | 'edit'; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      style={{
+        position: 'fixed',
+        top: 12,
+        right: 12,
+        background: mode === 'edit' ? '#b08d57' : 'rgba(10,10,14,0.82)',
+        color: mode === 'edit' ? '#16130e' : '#e8e8ec',
+        border: '1px solid #b08d57',
+        borderRadius: 8,
+        padding: '8px 16px',
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: 'pointer',
+      }}
+    >
+      {mode === 'edit' ? 'Done editing' : 'Edit pieces'}
+    </button>
+  )
+}
+
+function EditPanel({
+  selected,
+  isDropped,
+  pieceName,
+  placement,
+  onChange,
+  onRemove,
+}: {
+  selected: number | null
+  isDropped: boolean
+  pieceName?: string
+  placement: Placement | null
+  onChange: (patch: Partial<Placement>) => void
+  onRemove: () => void
+}) {
+  if (selected === null || !placement) {
+    return (
+      <div style={{ ...panelStyle, position: 'fixed', top: 60, right: 12, opacity: 0.85 }}>
+        Click a piece to select it
+      </div>
+    )
+  }
+  const slider = (
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    format: (v: number) => string,
+    key: keyof Placement,
+  ) => (
+    <label style={{ display: 'block', marginTop: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.8 }}>
+        <span>{label}</span>
+        <span>{format(value)}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange({ [key]: Number(e.target.value) })}
+        style={{ width: 200, accentColor: '#b08d57' }}
+      />
+    </label>
+  )
+  return (
+    <div style={{ ...panelStyle, position: 'fixed', top: 60, right: 12 }}>
+      <div style={{ fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {pieceName ?? `Pedestal ${selected + 1} (stand-in)`}
+      </div>
+      {slider(
+        'Rotate',
+        placement.rotationY,
+        0,
+        2 * Math.PI,
+        Math.PI / 90,
+        (v) => `${Math.round((v * 180) / Math.PI)}°`,
+        'rotationY',
+      )}
+      {slider('Scale', placement.scaleAdjust, 0.4, 1.8, 0.02, (v) => `${Math.round(v * 100)}%`, 'scaleAdjust')}
+      {slider('Height', placement.offsetY, 0, 0.3, 0.005, (v) => `${Math.round(v * 100)}cm`, 'offsetY')}
+      {isDropped && (
+        <>
+          <div style={{ opacity: 0.6, marginTop: 8, maxWidth: 220 }}>
+            Click another pedestal to move this piece there.
+          </div>
+          <button
+            onClick={onRemove}
+            style={{
+              marginTop: 8,
+              background: 'transparent',
+              color: '#ff7b72',
+              border: '1px solid #ff7b72',
+              borderRadius: 6,
+              padding: '4px 10px',
+              cursor: 'pointer',
+            }}
+          >
+            Remove piece
+          </button>
+        </>
+      )}
     </div>
   )
 }

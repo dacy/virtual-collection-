@@ -40,7 +40,7 @@ export async function loadDroppedFile(
   } else if (ext === 'fbx') {
     object = new FBXLoader().parse(await file.arrayBuffer(), '')
   } else if (ext === 'obj') {
-    object = new OBJLoader().parse(await file.text())
+    object = new OBJLoader().parse(injectPolypaint(await file.text()))
     // without the MTL there are no usable materials; show clean gray
     applyDefaultMaterial(object)
   } else if (ext === 'stl') {
@@ -51,7 +51,67 @@ export async function loadDroppedFile(
     throw new Error(`"${file.name}": unsupported format — use GLB/GLTF, FBX, OBJ, or STL`)
   }
 
+  enableVertexColors(object)
   return normalize(object, file.name)
+}
+
+/**
+ * ZBrush exports polypaint in OBJ files as `#MRGB` comment blocks (2 hex
+ * chars of mask + RGB per vertex, in vertex order) that three's OBJLoader
+ * ignores. Rewrite them as extended `v x y z r g b` vertex lines, which
+ * OBJLoader does parse into a color attribute. Values are converted
+ * sRGB → linear, since three treats vertex colors as linear.
+ */
+export function injectPolypaint(objText: string): string {
+  const hex = (objText.match(/^#MRGB\s+[0-9a-fA-F]+\s*$/gm) ?? [])
+    .map((line) => line.replace(/^#MRGB\s+/, '').trim())
+    // each vertex is exactly 8 hex chars; skip malformed/header lines
+    .filter((payload) => payload.length % 8 === 0)
+    .join('')
+  if (!hex) return objText
+
+  const colors: number[] = []
+  for (let i = 0; i + 8 <= hex.length; i += 8) {
+    colors.push(
+      srgbToLinear(parseInt(hex.slice(i + 2, i + 4), 16) / 255),
+      srgbToLinear(parseInt(hex.slice(i + 4, i + 6), 16) / 255),
+      srgbToLinear(parseInt(hex.slice(i + 6, i + 8), 16) / 255),
+    )
+  }
+
+  const num = '(-?[\\d.]+(?:[eE][+-]?\\d+)?)'
+  let vertex = 0
+  return objText.replace(
+    new RegExp(`^v\\s+${num}\\s+${num}\\s+${num}.*$`, 'gm'),
+    (line, x, y, z) => {
+      const c = vertex * 3
+      vertex += 1
+      if (c + 3 > colors.length) return line
+      return `v ${x} ${y} ${z} ${colors[c].toFixed(5)} ${colors[c + 1].toFixed(5)} ${colors[c + 2].toFixed(5)}`
+    },
+  )
+}
+
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+}
+
+/** Polypaint / vertex colors: if geometry carries a color attribute, make
+ *  the material actually show it (GLTFLoader does this itself; FBX, STL,
+ *  and our OBJ rewrite need it enabled). */
+function enableVertexColors(object: Object3D): void {
+  object.traverse((node) => {
+    const mesh = node as Mesh
+    if (!mesh.isMesh || !(mesh.geometry as BufferGeometry | undefined)?.attributes?.color) return
+    for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const std = mat as MeshStandardMaterial
+      if (!std.vertexColors) {
+        std.vertexColors = true
+        std.color?.set('#ffffff')
+        std.needsUpdate = true
+      }
+    }
+  })
 }
 
 function normalize(object: Object3D, name: string): DroppedPiece {

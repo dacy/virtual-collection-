@@ -13,10 +13,19 @@ const WALL_MARGIN = 0.35
  * right half drags to look. Collision is room-bounds clamping plus
  * cylinder push-out around each pedestal — enough to tune the close-viewing
  * feel the spec cares about.
+ *
+ * With `pointerLockEnabled={false}` (edit mode) clicks are left to piece
+ * selection; WASD/touch movement keeps working.
  */
-export function WalkControls() {
+export function WalkControls({ pointerLockEnabled = true }: { pointerLockEnabled?: boolean }) {
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
+  const lockEnabled = useRef(pointerLockEnabled)
+  lockEnabled.current = pointerLockEnabled
+
+  useEffect(() => {
+    if (!pointerLockEnabled && document.pointerLockElement) document.exitPointerLock()
+  }, [pointerLockEnabled])
   const yaw = useRef(0)
   const pitch = useRef(0)
   const keys = useRef(new Set<string>())
@@ -37,7 +46,7 @@ export function WalkControls() {
     const keyDown = onKey(true)
     const keyUp = onKey(false)
     const onClick = () => {
-      if (!('ontouchstart' in window)) el.requestPointerLock()
+      if (lockEnabled.current && !('ontouchstart' in window)) el.requestPointerLock()
     }
     const onMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement !== el) return

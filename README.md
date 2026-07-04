@@ -59,6 +59,17 @@ slot, and the budget overlay updates to your real collection's numbers.
 Everything stays in the page's memory — files are parsed locally and
 nothing is uploaded.
 
+**Polypaint / vertex colors** are supported: GLB and FBX vertex colors show
+automatically, and ZBrush OBJ exports with `#MRGB` polypaint blocks are
+parsed and displayed (sRGB-correct). Export from ZBrush with polypaint on
+and colorize enabled — no texture maps needed.
+
+**Adjusting pieces:** click **Edit pieces** (top right). Click any piece to
+select it, then use the sliders to rotate it, scale it, or lift it off the
+pedestal. With one of your own pieces selected, click a different pedestal
+to move it there (occupied pedestals swap), or remove it to bring the
+stand-in back. **Done editing** returns to walking.
+
 Spike limitations (the real import pipeline in Phase 3 removes them):
-OBJ/FBX with external textures load untextured; STL gets a neutral gray
-material; pieces aren't saved — reload starts fresh.
+OBJ/FBX with external texture-map files load untextured; STL gets a neutral
+gray material; pieces and placements aren't saved — reload starts fresh.
