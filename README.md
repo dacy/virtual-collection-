@@ -49,3 +49,16 @@ scans — deterministic, so runs are comparable across devices. Record the
 numbers in `docs/superpowers/specs/milestone-0-findings.md` (template
 there); those findings calibrate the real scene budgets and decide which
 import-time optimizations v1 must include.
+
+### Display your own models
+
+In the spike, drag GLB/GLTF, FBX, OBJ, or STL files anywhere onto the page
+(or tap **Display your own models…** bottom-left, which also works on
+phones). Each file replaces a stand-in pedestal piece, auto-fitted to the
+slot, and the budget overlay updates to your real collection's numbers.
+Everything stays in the page's memory — files are parsed locally and
+nothing is uploaded.
+
+Spike limitations (the real import pipeline in Phase 3 removes them):
+OBJ/FBX with external textures load untextured; STL gets a neutral gray
+material; pieces aren't saved — reload starts fresh.
