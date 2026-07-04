@@ -1,6 +1,7 @@
 import {
   Box3,
   Group,
+  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Vector3,
@@ -18,6 +19,9 @@ export interface DroppedPiece {
   /** normalized: bbox centered on origin, base at y=0, max dimension = 1 */
   object: Object3D
   triangles: number
+  /** upright-fix rotation applied via orientPiece (radians) */
+  orientation: { x: number; z: number }
+  internals: { pivot: Group; offsetGroup: Group; scaleGroup: Group }
 }
 
 /**
@@ -115,20 +119,61 @@ function enableVertexColors(object: Object3D): void {
 }
 
 function normalize(object: Object3D, name: string): DroppedPiece {
-  const box = new Box3().setFromObject(object)
-  if (box.isEmpty()) throw new Error(`"${name}": no geometry found in file`)
+  if (new Box3().setFromObject(object).isEmpty()) {
+    throw new Error(`"${name}": no geometry found in file`)
+  }
+  // scaleGroup ⊃ offsetGroup ⊃ pivot ⊃ model: pivot carries the upright-fix
+  // rotation; offset/scale re-normalize whatever bbox that rotation produces
+  const pivot = new Group()
+  pivot.add(object)
+  const offsetGroup = new Group()
+  offsetGroup.add(pivot)
+  const scaleGroup = new Group()
+  scaleGroup.add(offsetGroup)
+
+  const piece: DroppedPiece = {
+    name,
+    object: scaleGroup,
+    triangles: countTriangles(object),
+    orientation: { x: 0, z: 0 },
+    internals: { pivot, offsetGroup, scaleGroup },
+  }
+  orientPiece(piece, 0, 0)
+  return piece
+}
+
+/**
+ * Rotate a piece around X/Z to stand it upright (models often arrive
+ * Z-up or lying down), then re-normalize: after any orientation change the
+ * piece is re-centered, re-grounded at y=0, and re-fitted to max dim 1.
+ * The bbox is computed relative to the piece's own root so this works
+ * while the piece sits inside a live scene.
+ */
+export function orientPiece(piece: DroppedPiece, rotX: number, rotZ: number): void {
+  const { pivot, offsetGroup, scaleGroup } = piece.internals
+  pivot.rotation.set(rotX, 0, rotZ)
+  offsetGroup.position.set(0, 0, 0)
+  scaleGroup.scale.setScalar(1)
+  scaleGroup.updateWorldMatrix(true, true)
+
+  const toRoot = new Matrix4().copy(scaleGroup.matrixWorld).invert()
+  const box = new Box3()
+  const relative = new Matrix4()
+  pivot.traverse((node) => {
+    const mesh = node as Mesh
+    if (!mesh.isMesh || !mesh.geometry) return
+    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox()
+    relative.multiplyMatrices(toRoot, mesh.matrixWorld)
+    box.union(mesh.geometry.boundingBox!.clone().applyMatrix4(relative))
+  })
+  if (box.isEmpty()) return
+
   const size = box.getSize(new Vector3())
   const center = box.getCenter(new Vector3())
   const maxDim = Math.max(size.x, size.y, size.z) || 1
-
-  const inner = new Group()
-  inner.add(object)
-  object.position.set(-center.x, -box.min.y, -center.z)
-  const group = new Group()
-  group.add(inner)
-  inner.scale.setScalar(1 / maxDim)
-
-  return { name, object: group, triangles: countTriangles(object) }
+  offsetGroup.position.set(-center.x, -box.min.y, -center.z)
+  scaleGroup.scale.setScalar(1 / maxDim)
+  piece.orientation = { x: rotX, z: rotZ }
 }
 
 function countTriangles(object: Object3D): number {

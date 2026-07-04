@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeAll, describe, expect, it } from 'vitest'
 import { Box3, Vector3, type Mesh, type MeshStandardMaterial } from 'three'
-import { injectPolypaint, loadDroppedFile } from './importDropped'
+import { injectPolypaint, loadDroppedFile, orientPiece } from './importDropped'
 
 // jsdom's File is missing arrayBuffer()/text(); real browsers have them
 beforeAll(() => {
@@ -56,6 +56,29 @@ describe('loadDroppedFile', () => {
     expect(center.x).toBeCloseTo(0, 5)
     expect(center.z).toBeCloseTo(0, 5)
     expect(box.min.y).toBeCloseTo(0, 5)
+  })
+
+  it('re-grounds and re-fits after rotating on X to stand a piece up', async () => {
+    const piece = await loadDroppedFile(makeBinarySTL())
+    orientPiece(piece, Math.PI / 2, 0)
+
+    // the flat xy-plane triangle now lies in xz: nearly zero height,
+    // still grounded at y=0, centered, and re-fitted to max dimension 1
+    piece.object.updateMatrixWorld(true)
+    const box = new Box3().setFromObject(piece.object)
+    const size = box.getSize(new Vector3())
+    expect(size.y).toBeLessThan(0.01)
+    expect(Math.max(size.x, size.y, size.z)).toBeCloseTo(1, 5)
+    expect(box.min.y).toBeCloseTo(0, 5)
+    expect(box.getCenter(new Vector3()).x).toBeCloseTo(0, 5)
+    expect(piece.orientation).toEqual({ x: Math.PI / 2, z: 0 })
+
+    // rotating back restores the original normalization
+    orientPiece(piece, 0, 0)
+    piece.object.updateMatrixWorld(true)
+    const box2 = new Box3().setFromObject(piece.object)
+    expect(box2.getSize(new Vector3()).y).toBeGreaterThan(0.5)
+    expect(box2.min.y).toBeCloseTo(0, 5)
   })
 
   it('rejects unsupported formats with a clear message', async () => {

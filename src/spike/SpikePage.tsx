@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { CanvasTexture, type WebGLRenderer } from 'three'
 import { buildPedestalPiece, buildWallPiece, type StressPiece } from './pieces'
-import { disposeObject, loadDroppedFile, type DroppedPiece } from './importDropped'
+import { disposeObject, loadDroppedFile, orientPiece, type DroppedPiece } from './importDropped'
 import { EnvironmentLight, PEDESTAL, Room, SLOTS, WALL_FIT_BOX } from './room'
 import { WalkControls } from './WalkControls'
 import { emptyStats, StatsCollector, StatsOverlay, type SpikeStats } from './stats'
@@ -51,6 +51,8 @@ export default function SpikePage() {
   const [mode, setMode] = useState<'walk' | 'edit'>('walk')
   const [selected, setSelected] = useState<number | null>(null)
   const [messages, setMessages] = useState<string[]>([])
+  // orientation lives on the piece object itself; tick forces panel refresh
+  const [, orientTick] = useState(0)
   const nextDropSlot = useRef(0)
   const rendererRef = useRef<WebGLRenderer>()
   const piecesRef = useRef<StressPiece[]>([])
@@ -198,6 +200,7 @@ export default function SpikePage() {
         gl={{ antialias: true, powerPreference: 'high-performance' }}
         onCreated={(state) => {
           rendererRef.current = state.gl
+          state.gl.toneMappingExposure = 1.15
         }}
         onPointerMissed={() => {
           if (mode === 'edit') setSelected(null)
@@ -267,10 +270,16 @@ export default function SpikePage() {
       {mode === 'edit' && (
         <EditPanel
           selected={selected}
-          isDropped={selected !== null && !!dropped[selected]}
-          pieceName={selected !== null ? dropped[selected]?.name : undefined}
+          piece={selected !== null ? (dropped[selected] ?? null) : null}
           placement={selected !== null ? (placements[selected] ?? DEFAULT_PLACEMENT) : null}
           onChange={(patch) => selected !== null && updatePlacement(selected, patch)}
+          onOrient={(x, z) => {
+            if (selected === null) return
+            const piece = dropped[selected]
+            if (!piece) return
+            orientPiece(piece, x, z)
+            orientTick((t) => t + 1)
+          }}
           onRemove={() => selected !== null && removePiece(selected)}
         />
       )}
@@ -312,17 +321,17 @@ function ModeToggle({ mode, onToggle }: { mode: 'walk' | 'edit'; onToggle: () =>
 
 function EditPanel({
   selected,
-  isDropped,
-  pieceName,
+  piece,
   placement,
   onChange,
+  onOrient,
   onRemove,
 }: {
   selected: number | null
-  isDropped: boolean
-  pieceName?: string
+  piece: DroppedPiece | null
   placement: Placement | null
   onChange: (patch: Partial<Placement>) => void
+  onOrient: (x: number, z: number) => void
   onRemove: () => void
 }) {
   if (selected === null || !placement) {
@@ -332,6 +341,7 @@ function EditPanel({
       </div>
     )
   }
+  const isDropped = piece !== null
   const slider = (
     label: string,
     value: number,
@@ -360,16 +370,30 @@ function EditPanel({
   return (
     <div style={{ ...panelStyle, position: 'fixed', top: 60, right: 12 }}>
       <div style={{ fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {pieceName ?? `Pedestal ${selected + 1} (stand-in)`}
+        {piece?.name ?? `Pedestal ${selected + 1} (stand-in)`}
       </div>
       {slider(
-        'Rotate',
+        'Turn',
         placement.rotationY,
         0,
         2 * Math.PI,
         Math.PI / 90,
         (v) => `${Math.round((v * 180) / Math.PI)}°`,
         'rotationY',
+      )}
+      {isDropped && (
+        <>
+          <OrientSlider
+            label="Stand up (X)"
+            value={piece.orientation.x}
+            onChange={(x) => onOrient(x, piece.orientation.z)}
+          />
+          <OrientSlider
+            label="Tilt (Z)"
+            value={piece.orientation.z}
+            onChange={(z) => onOrient(piece.orientation.x, z)}
+          />
+        </>
       )}
       {slider('Scale', placement.scaleAdjust, 0.4, 1.8, 0.02, (v) => `${Math.round(v * 100)}%`, 'scaleAdjust')}
       {slider('Height', placement.offsetY, 0, 0.3, 0.005, (v) => `${Math.round(v * 100)}cm`, 'offsetY')}
@@ -395,6 +419,41 @@ function EditPanel({
         </>
       )}
     </div>
+  )
+}
+
+/** X/Z upright-fix slider in degrees; snaps near the common 90° stops. */
+function OrientSlider({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: number
+  onChange: (radians: number) => void
+}) {
+  const deg = (value * 180) / Math.PI
+  return (
+    <label style={{ display: 'block', marginTop: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', opacity: 0.8 }}>
+        <span>{label}</span>
+        <span>{Math.round(deg)}°</span>
+      </div>
+      <input
+        type="range"
+        min={-180}
+        max={180}
+        step={1}
+        value={deg}
+        onChange={(e) => {
+          let d = Number(e.target.value)
+          const snap = [-180, -90, 0, 90, 180].find((s) => Math.abs(d - s) <= 4)
+          if (snap !== undefined) d = snap
+          onChange((d * Math.PI) / 180)
+        }}
+        style={{ width: 200, accentColor: '#b08d57' }}
+      />
+    </label>
   )
 }
 
