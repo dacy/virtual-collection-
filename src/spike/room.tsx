@@ -183,7 +183,7 @@ function CeilingSpot({
         color="#ffe3c2"
         intensity={intensity}
         angle={angle}
-        penumbra={0.6}
+        penumbra={1}
         distance={7}
         decay={2}
       />
@@ -204,6 +204,8 @@ function DisplaySpots() {
           key={`spot_${s.id}`}
           position={[s.position[0], ROOM.height - 0.14, s.position[2]]}
           target={[s.position[0], PEDESTAL.height, s.position[2]]}
+          intensity={22}
+          angle={0.62}
         />
       ))}
       {SLOTS.filter((s) => s.kind === 'wall').map((s) => {
@@ -387,9 +389,11 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
 
       <Pedestals onPedestalClick={onPedestalClick} />
 
-      {/* cinematic lighting: dim cool ambient fill, one warm spot per
-          display as key */}
-      <ambientLight intensity={0.22} color="#b9c6d8" />
+      {/* cinematic lighting: one soft warm spot per display as key, and a
+          hemisphere fill whose warm ground color plays the light bouncing
+          up off the marble floor and steel slabs — lifts the undersides
+          without per-pedestal uplights */}
+      <hemisphereLight color="#aebdd2" groundColor="#d9c5a3" intensity={0.55} />
       <DisplaySpots />
     </group>
   )
