@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
+import { Bloom, EffectComposer, N8AO, Vignette } from '@react-three/postprocessing'
 import {
   CanvasTexture,
   Raycaster,
@@ -26,6 +27,9 @@ const params = new URLSearchParams(window.location.search)
 const TEX_SIZE = Number(params.get('tex')) || 2048
 const SLOT_LIMIT = Math.min(Number(params.get('pieces')) || SLOTS.length, SLOTS.length)
 const PEDESTAL_SLOT_COUNT = PEDESTAL_SLOTS.length
+/** AAA post stack (AO, bloom, vignette) — desktop by default, ?fx=off to
+ *  A/B the cost in the overlay, phones skip it entirely. */
+const AAA_FX = !('ontouchstart' in window) && params.get('fx') !== 'off'
 
 /** Per-slot manual placement tweaks, the same knobs the v1 slot editor
  *  will expose (rotationY, scaleAdjust, offsetY per the spec data model),
@@ -337,13 +341,18 @@ export default function SpikePage() {
               {isPedestal && adj.glass && (
                 <mesh position-y={PEDESTAL_TOP + 0.33}>
                   <boxGeometry args={[PEDESTAL.size + 0.07, 0.66, PEDESTAL.size + 0.07]} />
-                  <meshStandardMaterial
-                    color="#dcecf2"
+                  {/* physical glass: fresnel + clearcoat reflections of the
+                      HDR environment rig read as real panes */}
+                  <meshPhysicalMaterial
+                    color="#eaf4f8"
                     transparent
-                    opacity={0.12}
-                    roughness={0.04}
+                    opacity={0.15}
+                    roughness={0.03}
                     metalness={0}
-                    envMapIntensity={1.6}
+                    clearcoat={1}
+                    clearcoatRoughness={0.06}
+                    specularIntensity={1}
+                    envMapIntensity={2}
                     depthWrite={false}
                   />
                 </mesh>
@@ -360,6 +369,13 @@ export default function SpikePage() {
         <WalkControls pointerLockEnabled={mode === 'walk'} />
         <ReticlePicker onPick={onReticlePick} />
         <StatsCollector out={statsRef} />
+        {AAA_FX && (
+          <EffectComposer multisampling={4}>
+            <N8AO aoRadius={0.35} intensity={3.5} halfRes />
+            <Bloom mipmapBlur luminanceThreshold={1} intensity={0.45} />
+            <Vignette offset={0.22} darkness={0.5} />
+          </EffectComposer>
+        )}
       </Canvas>
       {mode === 'walk' && <Crosshair />}
       <StatsOverlay statsRef={statsRef} pieceCount={pieces.length} totalPieces={slots.length} />

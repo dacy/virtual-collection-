@@ -1,16 +1,24 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useThree, type ThreeEvent } from '@react-three/fiber'
 import {
+  BackSide,
+  BoxGeometry,
   CanvasTexture,
+  Color,
   Matrix4,
+  Mesh,
+  MeshBasicMaterial,
   Object3D,
+  PlaneGeometry,
   PMREMGenerator,
+  Quaternion,
   RepeatWrapping,
+  Scene,
   SRGBColorSpace,
+  Vector3,
   type InstancedMesh,
   type SpotLight as SpotLightImpl,
 } from 'three'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { mulberry32 } from './rng'
 
 export const ROOM = { width: 12, depth: 8, height: 3.6 }
@@ -73,6 +81,10 @@ export const SLOTS: SpikeSlot[] = [
 
 export const PEDESTAL_SLOTS = SLOTS.filter((s) => s.kind === 'pedestal')
 
+// HDR (>1) colors so the bloom pass picks these up as light sources
+const COVE_HDR = new Color('#ffc98f').multiplyScalar(2.2)
+const FIXTURE_LENS_HDR = new Color('#ffe3c2').multiplyScalar(4)
+
 /** y of the surface pieces actually stand on (top of the steel slab). */
 export const PEDESTAL_TOP = PEDESTAL.height + 0.026
 
@@ -83,18 +95,54 @@ export const COLLIDERS = PEDESTAL_SLOTS.map((s) => ({
   radius: PEDESTAL.size * 0.75 + 0.25,
 }))
 
-/** Procedural IBL (three's RoomEnvironment) — believable reflections on the
- *  dynamic pieces with zero network fetches, standing in for the baked room's
- *  environment map. Kept dim so the warm spotlights dominate (cinematic
- *  key/fill contrast). */
+/** Studio-style light rig baked into the environment map: warm HDR ceiling
+ *  strips, a cool and a warm side panel, and a floor-bounce card. This is
+ *  what glass, steel, and glossy pieces actually reflect — much richer than
+ *  three's neutral RoomEnvironment. Basic materials act as emitters in the
+ *  PMREM bake; colors above 1.0 are intentional (HDR). */
+function makeGalleryEnvScene(): Scene {
+  const scene = new Scene()
+  const emitter = (
+    geometry: PlaneGeometry | BoxGeometry,
+    color: Color,
+    position: [number, number, number],
+    rotation: [number, number, number],
+  ) => {
+    const mesh = new Mesh(geometry, new MeshBasicMaterial({ color }))
+    mesh.position.set(...position)
+    mesh.rotation.set(...rotation)
+    scene.add(mesh)
+  }
+
+  const shell = new Mesh(
+    new BoxGeometry(20, 12, 20),
+    new MeshBasicMaterial({ color: new Color('#181a1e'), side: BackSide }),
+  )
+  shell.position.y = 4
+  scene.add(shell)
+
+  // warm overhead strips (the "track lighting" every glossy surface mirrors)
+  const warm = new Color('#ffd9ac').multiplyScalar(5)
+  for (const x of [-5, 0, 5]) {
+    emitter(new PlaneGeometry(3.2, 9), warm, [x, 9.8, 0], [Math.PI / 2, 0, 0])
+  }
+  // cool fill panel on one side, soft warm kicker on the other
+  emitter(new PlaneGeometry(7, 4.5), new Color('#a9c0dd').multiplyScalar(2), [-9.8, 4.5, 0], [0, Math.PI / 2, 0])
+  emitter(new PlaneGeometry(7, 4.5), new Color('#ffcf9e').multiplyScalar(1.4), [9.8, 4.5, 0], [0, -Math.PI / 2, 0])
+  // floor bounce
+  emitter(new PlaneGeometry(18, 18), new Color('#6e5c46').multiplyScalar(1.1), [0, -1.9, 0], [-Math.PI / 2, 0, 0])
+
+  return scene
+}
+
 export function EnvironmentLight() {
   const gl = useThree((s) => s.gl)
   const scene = useThree((s) => s.scene)
   useEffect(() => {
     const pmrem = new PMREMGenerator(gl)
-    const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
+    const env = pmrem.fromScene(makeGalleryEnvScene(), 0.035).texture
     scene.environment = env
-    scene.environmentIntensity = 0.45
+    scene.environmentIntensity = 0.5
     return () => {
       scene.environment = null
       scene.environmentIntensity = 1
@@ -231,10 +279,13 @@ function Pedestals({ onPedestalClick }: { onPedestalClick?: (slotIndex: number) 
   const slab = useRef<InstancedMesh>(null)
   const strip = useRef<InstancedMesh>(null)
   const fixture = useRef<InstancedMesh>(null)
+  const lens = useRef<InstancedMesh>(null)
   const n = PEDESTAL_SLOTS.length
 
   useLayoutEffect(() => {
     const m = new Matrix4()
+    const faceDown = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2)
+    const one = new Vector3(1, 1, 1)
     PEDESTAL_SLOTS.forEach((s, i) => {
       const [x, , z] = s.position
       m.setPosition(x, PEDESTAL.height / 2, z)
@@ -245,8 +296,10 @@ function Pedestals({ onPedestalClick }: { onPedestalClick?: (slotIndex: number) 
       strip.current!.setMatrixAt(i, m)
       m.setPosition(x, ROOM.height - 0.07, z)
       fixture.current!.setMatrixAt(i, m)
+      m.compose(new Vector3(x, ROOM.height - 0.142, z), faceDown, one)
+      lens.current!.setMatrixAt(i, m)
     })
-    for (const ref of [body, slab, strip, fixture]) {
+    for (const ref of [body, slab, strip, fixture, lens]) {
       ref.current!.instanceMatrix.needsUpdate = true
     }
   }, [])
@@ -289,6 +342,11 @@ function Pedestals({ onPedestalClick }: { onPedestalClick?: (slotIndex: number) 
       <instancedMesh ref={fixture} args={[undefined, undefined, n]}>
         <cylinderGeometry args={[0.055, 0.075, 0.14, 16]} />
         <meshStandardMaterial color="#0c0d0f" roughness={0.5} metalness={0.6} />
+      </instancedMesh>
+      {/* glowing lens under each fixture — HDR so bloom halos it */}
+      <instancedMesh ref={lens} args={[undefined, undefined, n]}>
+        <circleGeometry args={[0.05, 16]} />
+        <meshBasicMaterial color={FIXTURE_LENS_HDR} />
       </instancedMesh>
     </>
   )
@@ -369,7 +427,7 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
       ] as const).map(([x, z, len, rot], i) => (
         <mesh key={`cove${i}`} position={[x, height - 0.22, z]} rotation-y={rot}>
           <boxGeometry args={[len, 0.05, 0.05]} />
-          <meshBasicMaterial color="#ffc98f" />
+          <meshBasicMaterial color={COVE_HDR} />
         </mesh>
       ))}
 
