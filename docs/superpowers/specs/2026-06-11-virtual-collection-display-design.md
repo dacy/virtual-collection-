@@ -71,12 +71,24 @@ once loaded, everything runs on the user's machine:
   third party.
 - **Storage is local.** Pieces are stored as blobs in IndexedDB, which lives
   on the user's own disk, sandboxed per browser profile.
+- **Local data is protected against eviction.** Browsers treat site storage
+  as best-effort and may evict it under disk pressure; Safari deletes site
+  data after 7 days of inactivity for non-installed web apps. The app
+  therefore requests durable storage (`navigator.storage.persist()`) on first
+  save, shows storage usage vs. quota in the UI, prompts the user to download
+  a `.gallery` backup when the library grows or hasn't been backed up
+  recently, and recommends installing as a PWA on Safari (installed PWAs are
+  exempt from the 7-day eviction).
 - **Sharing is explicit only.** The `.gallery` export is a plain file
   download; nothing is shared unless the user hands that file to someone.
 - **Enforced, not just promised.** The app ships a Content-Security-Policy of
-  `connect-src 'self'`, so the browser itself blocks any request to another
-  origin. Anyone can verify in DevTools' Network tab that zero requests are
-  made after page load. No telemetry or analytics in v1.
+  `connect-src 'self'` (as a `<meta http-equiv>` tag, so it holds on any
+  static host regardless of server headers), so the browser itself blocks any
+  request to another origin. Anyone can verify in DevTools' Network tab that
+  zero requests are made after page load. No telemetry or analytics in v1.
+  All decoder binaries (Draco, KTX2/Basis, meshopt WASM) are bundled with the
+  app — never fetched from a CDN, which is also what Three.js loaders default
+  to if left unconfigured.
 - **Runs fully offline.** Two supported modes: (a) open the hosted URL once
   and the app installs as a PWA with all assets cached, after which it works
   with the network cable unplugged; (b) download a release zip and serve it
@@ -121,7 +133,12 @@ or UI.
   non-destructive; the stored model is never modified.
 - **Bundle file** — a zip containing a versioned `manifest.json` (space +
   piece metadata), model blobs, and thumbnails. The schema version field
-  enables forward-compatible import.
+  enables forward-compatible import. Export and import stream piece-by-piece
+  (zip.js streams) rather than assembling the archive in memory — a full
+  library can approach 1 GB, which would OOM a tab (especially mobile) if
+  buffered.
+- Deleting a piece that is placed in a space warns and lists the affected
+  spaces; confirmed deletion clears those placements (slots revert to empty).
 
 ## Import Pipeline
 
@@ -137,8 +154,10 @@ or UI.
 
 **Error handling:** unsupported format → clear message listing supported
 types; corrupt file → error toast with detail; missing textures (OBJ/FBX) →
-load untextured with a warning; very large file (> ~50 MB) → warn before
-import. Failures never corrupt the library.
+load untextured with a warning; ASCII or pre-7.0 FBX (which Three's
+FBXLoader can't parse) → specific message suggesting re-export as binary FBX
+or GLB; very large file (> ~50 MB) → warn before import. Failures never
+corrupt the library.
 
 ## The Gallery (v1 content)
 
@@ -161,6 +180,10 @@ import UI, persistence, or editing exists:
   20 slots filled with deliberately heavy free models (photogrammetry scans,
   ~100k–500k triangles each, 2k–4k textures) loaded from disk.
 - First-person walk controller and an on-screen FPS/draw-call/VRAM meter.
+- Piece lighting the way v1 will do it: environment-map IBL so dynamic
+  pieces sit believably in the baked room, plus a cheap fake contact shadow
+  under each piece — the spike validates this look/performance tradeoff too,
+  since pieces can't participate in the baked lighting.
 - Measured on the two reference devices below.
 
 **Pass criteria:** sustained 60 fps on a mid-range laptop with integrated
@@ -176,8 +199,9 @@ below.
 ### Budgets and techniques
 
 - **Scene budget (initial, to be calibrated by Milestone 0):** ≤ 3M total
-  triangles, ≤ 250 draw calls, ≤ 500 MB GPU texture memory with all slots
-  filled.
+  triangles and ≤ 250 draw calls with all slots filled. GPU texture memory is
+  per-device-class: ≤ 500 MB on desktop, ≤ 256 MB on mobile (mobile browsers
+  kill tabs well before desktop does; piece textures cap at 2k on mobile).
 - Room: Draco/meshopt-compressed geometry, KTX2 textures, baked lighting (no
   expensive realtime shadows).
 - Pieces: stored as GLB; import shows the piece's triangle/texture stats and
