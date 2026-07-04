@@ -1,25 +1,42 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { CanvasTexture, type WebGLRenderer } from 'three'
+import { Canvas, useThree } from '@react-three/fiber'
+import {
+  CanvasTexture,
+  Raycaster,
+  Vector2,
+  type Intersection,
+  type Object3D,
+  type WebGLRenderer,
+} from 'three'
 import { buildPedestalPiece, buildWallPiece, type StressPiece } from './pieces'
 import { disposeObject, loadDroppedFile, orientPiece, type DroppedPiece } from './importDropped'
-import { EnvironmentLight, PEDESTAL, Room, SLOTS, WALL_FIT_BOX } from './room'
+import {
+  EnvironmentLight,
+  PEDESTAL,
+  PEDESTAL_SLOTS,
+  PEDESTAL_TOP,
+  Room,
+  SLOTS,
+  WALL_FIT_BOX,
+} from './room'
 import { WalkControls } from './WalkControls'
 import { emptyStats, StatsCollector, StatsOverlay, type SpikeStats } from './stats'
 
 const params = new URLSearchParams(window.location.search)
 const TEX_SIZE = Number(params.get('tex')) || 2048
 const SLOT_LIMIT = Math.min(Number(params.get('pieces')) || SLOTS.length, SLOTS.length)
-const PEDESTAL_SLOT_COUNT = SLOTS.filter((s) => s.kind === 'pedestal').length
+const PEDESTAL_SLOT_COUNT = PEDESTAL_SLOTS.length
 
 /** Per-slot manual placement tweaks, the same knobs the v1 slot editor
- *  will expose (rotationY, scaleAdjust, offsetY per the spec data model). */
+ *  will expose (rotationY, scaleAdjust, offsetY per the spec data model),
+ *  plus the vitrine toggle. */
 interface Placement {
   rotationY: number
   scaleAdjust: number
   offsetY: number
+  glass: boolean
 }
-const DEFAULT_PLACEMENT: Placement = { rotationY: 0, scaleAdjust: 1, offsetY: 0 }
+const DEFAULT_PLACEMENT: Placement = { rotationY: 0, scaleAdjust: 1, offsetY: 0, glass: true }
 
 function makeContactShadowTexture(): CanvasTexture {
   const c = document.createElement('canvas')
@@ -33,6 +50,54 @@ function makeContactShadowTexture(): CanvasTexture {
   return new CanvasTexture(c)
 }
 
+/** Map a raycast hit to a slot index: pieces carry slotIndex on an
+ *  ancestor group; pedestal instances map via instanceId. */
+function slotFromHit(hit: Intersection): number | null {
+  if (hit.object.userData.pedestalInstance && hit.instanceId !== undefined) {
+    return SLOTS.indexOf(PEDESTAL_SLOTS[hit.instanceId])
+  }
+  let node: Object3D | null = hit.object
+  while (node) {
+    if (typeof node.userData.slotIndex === 'number') return node.userData.slotIndex
+    node = node.parent
+  }
+  return null
+}
+
+const SCREEN_CENTER = new Vector2(0, 0)
+
+/** Walk-mode editing entry point: while pointer-locked, a click raycasts
+ *  from the screen-center dot; hitting a piece or pedestal opens the edit
+ *  panel for that slot without a trip through Esc + buttons. */
+function ReticlePicker({ onPick }: { onPick: (slot: number) => void }) {
+  const gl = useThree((s) => s.gl)
+  const camera = useThree((s) => s.camera)
+  const scene = useThree((s) => s.scene)
+  const raycaster = useMemo(() => {
+    const r = new Raycaster()
+    r.far = 10
+    return r
+  }, [])
+
+  useEffect(() => {
+    const el = gl.domElement
+    const onDown = () => {
+      if (document.pointerLockElement !== el) return
+      raycaster.setFromCamera(SCREEN_CENTER, camera)
+      for (const hit of raycaster.intersectObjects(scene.children, true)) {
+        const slot = slotFromHit(hit)
+        if (slot !== null) {
+          onPick(slot)
+          return
+        }
+      }
+    }
+    el.addEventListener('mousedown', onDown)
+    return () => el.removeEventListener('mousedown', onDown)
+  }, [gl, camera, scene, raycaster, onPick])
+  return null
+}
+
 /**
  * Milestone 0: the populated-room performance proof from the design spec.
  * 20 slots filled with heavy procedural stand-ins for photogrammetry scans
@@ -40,7 +105,7 @@ function makeContactShadowTexture(): CanvasTexture {
  * live budget meter. Tune with ?tex=1024 and ?pieces=N.
  *
  * Drop your own GLB/GLTF/FBX/OBJ/STL files (or use the button) to replace
- * the stand-ins pedestal by pedestal; Edit mode adjusts placement.
+ * the stand-ins; aim the center dot at a display and click to edit it.
  */
 export default function SpikePage() {
   const [pieces, setPieces] = useState<StressPiece[]>([])
@@ -91,13 +156,13 @@ export default function SpikePage() {
   }, [])
 
   const importFiles = useCallback(
-    async (files: FileList | File[]) => {
+    async (files: FileList | File[], targetSlot?: number) => {
       for (const file of Array.from(files)) {
         try {
           const piece = await loadDroppedFile(file, rendererRef.current)
-          // fill pedestals in order, cycling once all are taken
-          const slot = nextDropSlot.current % Math.min(PEDESTAL_SLOT_COUNT, SLOT_LIMIT)
-          nextDropSlot.current += 1
+          const slot =
+            targetSlot ?? nextDropSlot.current % Math.min(PEDESTAL_SLOT_COUNT, SLOT_LIMIT)
+          if (targetSlot === undefined) nextDropSlot.current += 1
           setDropped((prev) => {
             const replaced = prev[slot]
             if (replaced) {
@@ -113,10 +178,15 @@ export default function SpikePage() {
             next[slot] = piece
             return next
           })
-          setPlacements((prev) => ({ ...prev, [slot]: DEFAULT_PLACEMENT }))
+          setPlacements((prev) => ({
+            ...prev,
+            [slot]: { ...DEFAULT_PLACEMENT, glass: prev[slot]?.glass ?? true },
+          }))
           note(
             `${file.name}: ${(piece.triangles / 1000).toFixed(0)}k triangles → pedestal ${slot + 1}`,
           )
+          // replacing via the panel: only the first file goes to the slot
+          if (targetSlot !== undefined) break
         } catch (err) {
           note(err instanceof Error ? err.message : String(err))
         }
@@ -133,15 +203,12 @@ export default function SpikePage() {
     [importFiles],
   )
 
-  const updatePlacement = useCallback(
-    (slot: number, patch: Partial<Placement>) => {
-      setPlacements((prev) => ({
-        ...prev,
-        [slot]: { ...(prev[slot] ?? DEFAULT_PLACEMENT), ...patch },
-      }))
-    },
-    [],
-  )
+  const updatePlacement = useCallback((slot: number, patch: Partial<Placement>) => {
+    setPlacements((prev) => ({
+      ...prev,
+      [slot]: { ...(prev[slot] ?? DEFAULT_PLACEMENT), ...patch },
+    }))
+  }, [])
 
   /** Move the selected dropped piece to another pedestal (swap if taken). */
   const movePiece = useCallback((from: number, to: number) => {
@@ -183,6 +250,13 @@ export default function SpikePage() {
     [mode, selected, dropped, movePiece],
   )
 
+  const onReticlePick = useCallback((slot: number) => {
+    if (SLOTS[slot].kind !== 'pedestal') return
+    document.exitPointerLock()
+    setMode('edit')
+    setSelected(slot)
+  }, [])
+
   const toggleMode = useCallback(() => {
     setMode((m) => (m === 'walk' ? 'edit' : 'walk'))
     setSelected(null)
@@ -213,33 +287,40 @@ export default function SpikePage() {
           const [x, y, z] = slot.position
           const droppedHere = dropped[i]
           const adj = placements[i] ?? DEFAULT_PLACEMENT
-          const selectable = mode === 'edit' && slot.kind === 'pedestal'
+          const isPedestal = slot.kind === 'pedestal'
+          const selectable = mode === 'edit' && isPedestal
           return (
-            <group key={slot.id} position={[x, y, z]} rotation-y={slot.rotationY}>
-              <group
-                rotation-y={adj.rotationY}
-                onClick={
-                  selectable
-                    ? (e) => {
-                        e.stopPropagation()
-                        onPedestalClick(i)
-                      }
-                    : undefined
-                }
-              >
+            <group
+              key={slot.id}
+              position={[x, y, z]}
+              rotation-y={slot.rotationY}
+              userData={{ slotIndex: i }}
+              onClick={
+                selectable
+                  ? (e) => {
+                      e.stopPropagation()
+                      onPedestalClick(i)
+                    }
+                  : undefined
+              }
+            >
+              <group rotation-y={adj.rotationY}>
                 {droppedHere ? (
-                  <primitive
-                    object={droppedHere.object}
+                  // the piece root's own transform holds the import
+                  // normalization — fit/lift on a wrapper, never on the root
+                  <group
                     scale={PEDESTAL.fitBox * adj.scaleAdjust}
-                    position-y={PEDESTAL.height + adj.offsetY}
-                  />
+                    position-y={PEDESTAL_TOP + adj.offsetY}
+                  >
+                    <primitive object={droppedHere.object} />
+                  </group>
                 ) : (
                   <mesh
                     geometry={piece.geometry}
                     scale={piece.scale * adj.scaleAdjust}
                     position-y={
-                      piece.kind === 'pedestal'
-                        ? PEDESTAL.height + piece.yOffset * adj.scaleAdjust + adj.offsetY
+                      isPedestal
+                        ? PEDESTAL_TOP + piece.yOffset * adj.scaleAdjust + adj.offsetY
                         : undefined
                     }
                   >
@@ -247,14 +328,28 @@ export default function SpikePage() {
                   </mesh>
                 )}
               </group>
-              {slot.kind === 'pedestal' && (
-                <mesh rotation-x={-Math.PI / 2} position-y={PEDESTAL.height + 0.005}>
+              {isPedestal && (
+                <mesh rotation-x={-Math.PI / 2} position-y={PEDESTAL_TOP + 0.003}>
                   <planeGeometry args={[PEDESTAL.fitBox * 1.6, PEDESTAL.fitBox * 1.6]} />
                   <meshBasicMaterial map={shadowMap} transparent depthWrite={false} />
                 </mesh>
               )}
+              {isPedestal && adj.glass && (
+                <mesh position-y={PEDESTAL_TOP + 0.33}>
+                  <boxGeometry args={[PEDESTAL.size + 0.07, 0.66, PEDESTAL.size + 0.07]} />
+                  <meshStandardMaterial
+                    color="#dcecf2"
+                    transparent
+                    opacity={0.12}
+                    roughness={0.04}
+                    metalness={0}
+                    envMapIntensity={1.6}
+                    depthWrite={false}
+                  />
+                </mesh>
+              )}
               {selected === i && (
-                <mesh rotation-x={-Math.PI / 2} position-y={PEDESTAL.height + 0.01}>
+                <mesh rotation-x={-Math.PI / 2} position-y={PEDESTAL_TOP + 0.006}>
                   <ringGeometry args={[PEDESTAL.fitBox * 0.62, PEDESTAL.fitBox * 0.72, 48]} />
                   <meshBasicMaterial color="#b08d57" transparent opacity={0.9} depthWrite={false} />
                 </mesh>
@@ -263,8 +358,10 @@ export default function SpikePage() {
           )
         })}
         <WalkControls pointerLockEnabled={mode === 'walk'} />
+        <ReticlePicker onPick={onReticlePick} />
         <StatsCollector out={statsRef} />
       </Canvas>
+      {mode === 'walk' && <Crosshair />}
       <StatsOverlay statsRef={statsRef} pieceCount={pieces.length} totalPieces={slots.length} />
       <ModeToggle mode={mode} onToggle={toggleMode} />
       {mode === 'edit' && (
@@ -280,11 +377,32 @@ export default function SpikePage() {
             orientPiece(piece, x, z)
             orientTick((t) => t + 1)
           }}
+          onReplace={(files) => selected !== null && importFiles(files, selected)}
           onRemove={() => selected !== null && removePiece(selected)}
         />
       )}
       <DropPanel messages={messages} onFiles={importFiles} />
     </div>
+  )
+}
+
+function Crosshair() {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        width: 6,
+        height: 6,
+        marginLeft: -3,
+        marginTop: -3,
+        borderRadius: '50%',
+        background: 'rgba(255,255,255,0.85)',
+        boxShadow: '0 0 4px rgba(0,0,0,0.8)',
+        pointerEvents: 'none',
+      }}
+    />
   )
 }
 
@@ -325,6 +443,7 @@ function EditPanel({
   placement,
   onChange,
   onOrient,
+  onReplace,
   onRemove,
 }: {
   selected: number | null
@@ -332,8 +451,10 @@ function EditPanel({
   placement: Placement | null
   onChange: (patch: Partial<Placement>) => void
   onOrient: (x: number, z: number) => void
+  onReplace: (files: File[]) => void
   onRemove: () => void
 }) {
+  const replaceInput = useRef<HTMLInputElement>(null)
   if (selected === null || !placement) {
     return (
       <div style={{ ...panelStyle, position: 'fixed', top: 60, right: 12, opacity: 0.85 }}>
@@ -372,6 +493,33 @@ function EditPanel({
       <div style={{ fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {piece?.name ?? `Pedestal ${selected + 1} (stand-in)`}
       </div>
+      <button
+        onClick={() => replaceInput.current?.click()}
+        style={{
+          marginTop: 8,
+          background: '#b08d57',
+          color: '#16130e',
+          border: 'none',
+          borderRadius: 6,
+          padding: '6px 12px',
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: 'pointer',
+          width: '100%',
+        }}
+      >
+        {isDropped ? 'Change model…' : 'Display your model here…'}
+      </button>
+      <input
+        ref={replaceInput}
+        type="file"
+        accept=".glb,.gltf,.fbx,.obj,.stl"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          if (e.target.files?.length) onReplace(Array.from(e.target.files))
+          e.target.value = ''
+        }}
+      />
       {slider(
         'Turn',
         placement.rotationY,
@@ -395,8 +543,33 @@ function EditPanel({
           />
         </>
       )}
-      {slider('Scale', placement.scaleAdjust, 0.4, 1.8, 0.02, (v) => `${Math.round(v * 100)}%`, 'scaleAdjust')}
-      {slider('Height', placement.offsetY, 0, 0.3, 0.005, (v) => `${Math.round(v * 100)}cm`, 'offsetY')}
+      {slider(
+        'Scale',
+        placement.scaleAdjust,
+        0.4,
+        1.8,
+        0.02,
+        (v) => `${Math.round(v * 100)}%`,
+        'scaleAdjust',
+      )}
+      {slider(
+        'Height',
+        placement.offsetY,
+        0,
+        0.3,
+        0.005,
+        (v) => `${Math.round(v * 100)}cm`,
+        'offsetY',
+      )}
+      <label style={{ display: 'flex', gap: 8, marginTop: 10, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={placement.glass}
+          onChange={(e) => onChange({ glass: e.target.checked })}
+          style={{ accentColor: '#b08d57' }}
+        />
+        Glass case
+      </label>
       {isDropped && (
         <>
           <div style={{ opacity: 0.6, marginTop: 8, maxWidth: 220 }}>

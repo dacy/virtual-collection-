@@ -149,7 +149,7 @@ export function StatsOverlay({
       <div style={{ opacity: 0.55, marginTop: 6, fontSize: 12 }}>
         {isTouch
           ? 'Left half: move · right half: look'
-          : 'Click to walk — WASD + mouse, Esc to release'}
+          : 'Click to walk (WASD + mouse) · aim the dot at a display and click to edit it'}
       </div>
     </div>
   )

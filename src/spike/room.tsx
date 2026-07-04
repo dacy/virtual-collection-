@@ -71,7 +71,10 @@ export const SLOTS: SpikeSlot[] = [
   })),
 ]
 
-const PEDESTAL_SLOTS = SLOTS.filter((s) => s.kind === 'pedestal')
+export const PEDESTAL_SLOTS = SLOTS.filter((s) => s.kind === 'pedestal')
+
+/** y of the surface pieces actually stand on (top of the steel slab). */
+export const PEDESTAL_TOP = PEDESTAL.height + 0.026
 
 /** Cylinder colliders the walk controller pushes out of. */
 export const COLLIDERS = PEDESTAL_SLOTS.map((s) => ({
@@ -91,7 +94,7 @@ export function EnvironmentLight() {
     const pmrem = new PMREMGenerator(gl)
     const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
     scene.environment = env
-    scene.environmentIntensity = 0.35
+    scene.environmentIntensity = 0.45
     return () => {
       scene.environment = null
       scene.environmentIntensity = 1
@@ -154,7 +157,17 @@ function makeMarbleFloorTexture(): CanvasTexture {
 }
 
 /** Warm ceiling spot with an aimable target (no shadow maps, per spec). */
-function CeilingSpot({ position, target }: { position: [number, number, number]; target: [number, number, number] }) {
+function CeilingSpot({
+  position,
+  target,
+  intensity = 30,
+  angle = 0.5,
+}: {
+  position: [number, number, number]
+  target: [number, number, number]
+  intensity?: number
+  angle?: number
+}) {
   const light = useRef<SpotLightImpl>(null)
   const [targetObj] = useState(() => new Object3D())
   useEffect(() => {
@@ -168,12 +181,43 @@ function CeilingSpot({ position, target }: { position: [number, number, number];
         ref={light}
         position={position}
         color="#ffe3c2"
-        intensity={55}
-        angle={0.95}
-        penumbra={0.75}
-        distance={14}
+        intensity={intensity}
+        angle={angle}
+        penumbra={0.6}
+        distance={7}
         decay={2}
       />
+    </>
+  )
+}
+
+/** Museum-style lighting: every display gets its own narrow overhead spot
+ *  (16 pedestals from their ceiling fixtures + 4 wall pieces from angled
+ *  spots). Deliberately many dynamic lights — the overlay tells us what
+ *  that really costs, which informs the baked-lighting design of the real
+ *  Gallery room. */
+function DisplaySpots() {
+  return (
+    <>
+      {PEDESTAL_SLOTS.map((s) => (
+        <CeilingSpot
+          key={`spot_${s.id}`}
+          position={[s.position[0], ROOM.height - 0.14, s.position[2]]}
+          target={[s.position[0], PEDESTAL.height, s.position[2]]}
+        />
+      ))}
+      {SLOTS.filter((s) => s.kind === 'wall').map((s) => {
+        const inward = s.position[2] < 0 ? 1 : -1
+        return (
+          <CeilingSpot
+            key={`spot_${s.id}`}
+            position={[s.position[0], ROOM.height - 0.14, s.position[2] + inward * 1.3]}
+            target={[s.position[0], s.position[1], s.position[2]]}
+            intensity={22}
+            angle={0.42}
+          />
+        )
+      })}
     </>
   )
 }
@@ -216,17 +260,29 @@ function Pedestals({ onPedestalClick }: { onPedestalClick?: (slotIndex: number) 
 
   return (
     <>
-      <instancedMesh ref={body} args={[undefined, undefined, n]} onClick={click}>
+      <instancedMesh
+        ref={body}
+        args={[undefined, undefined, n]}
+        onClick={click}
+        userData={{ pedestalInstance: true }}
+      >
         <boxGeometry args={[PEDESTAL.size, PEDESTAL.height, PEDESTAL.size]} />
         <meshStandardMaterial color="#212226" roughness={0.35} metalness={0.15} />
       </instancedMesh>
-      <instancedMesh ref={slab} args={[undefined, undefined, n]} onClick={click}>
+      <instancedMesh
+        ref={slab}
+        args={[undefined, undefined, n]}
+        onClick={click}
+        userData={{ pedestalInstance: true }}
+      >
         <boxGeometry args={[PEDESTAL.size + 0.05, 0.024, PEDESTAL.size + 0.05]} />
         <meshStandardMaterial color="#8d9094" roughness={0.35} metalness={0.85} />
       </instancedMesh>
+      {/* subtle warm reveal only — bright underlight made pieces look lit
+          from below */}
       <instancedMesh ref={strip} args={[undefined, undefined, n]}>
-        <boxGeometry args={[PEDESTAL.size + 0.02, 0.012, PEDESTAL.size + 0.02]} />
-        <meshBasicMaterial color="#ffd9a0" />
+        <boxGeometry args={[PEDESTAL.size + 0.02, 0.008, PEDESTAL.size + 0.02]} />
+        <meshBasicMaterial color="#5e492c" />
       </instancedMesh>
       <instancedMesh ref={fixture} args={[undefined, undefined, n]}>
         <cylinderGeometry args={[0.055, 0.075, 0.14, 16]} />
@@ -331,13 +387,10 @@ export function Room({ onPedestalClick }: { onPedestalClick?: (slotIndex: number
 
       <Pedestals onPedestalClick={onPedestalClick} />
 
-      {/* cinematic lighting: dim cool ambient fill, warm spots as key */}
-      <ambientLight intensity={0.18} color="#b9c6d8" />
-      <CeilingSpot position={[-3, height - 0.15, -1.4]} target={[-3.2, 0, -2.2]} />
-      <CeilingSpot position={[3, height - 0.15, -1.4]} target={[3.2, 0, -2.2]} />
-      <CeilingSpot position={[-3, height - 0.15, 1.4]} target={[-3.2, 0, 2.2]} />
-      <CeilingSpot position={[3, height - 0.15, 1.4]} target={[3.2, 0, 2.2]} />
-      <CeilingSpot position={[0, height - 0.15, 0]} target={[0, 0, 0]} />
+      {/* cinematic lighting: dim cool ambient fill, one warm spot per
+          display as key */}
+      <ambientLight intensity={0.22} color="#b9c6d8" />
+      <DisplaySpots />
     </group>
   )
 }
