@@ -142,7 +142,7 @@ function PerfGovernor({ ready }: { ready: boolean }) {
   const acc = useRef({ time: 0, frames: 0, readySince: null as number | null, lastDrop: 0 })
   useFrame((_, delta) => {
     const s = useQuality.getState()
-    if (!ready || !s.autoAdjust || s.preset === 'low') return
+    if (!ready || !s.autoAdjust || s.pinned || s.preset === 'low') return
     const a = acc.current
     const now = performance.now()
     if (a.readySince === null) a.readySince = now
@@ -482,7 +482,7 @@ export default function SpikePage() {
           const fit = cfg ? fitBoxFor(cfg) : WALL_FIT_BOX
           const top = cfg ? pedestalTopFor(cfg) : 0
           const selectable = mode === 'edit' && isPedestal
-          const caseHeight = Math.max(0.42, fit * adj.scaleAdjust + 0.18)
+          const caseHeight = Math.max(0.42, fit * adj.scaleAdjust + adj.offsetY + 0.18)
           return (
             <group
               key={slot.id}
@@ -544,8 +544,10 @@ export default function SpikePage() {
         <ShadowRefresh />
         {composerOn && (
           // multisampling stays 0: composer MSAA + half-res AO is a known
-          // flicker source on many GPUs — SMAA covers the edges instead
-          <EffectComposer key={`fx_${glEpoch}`} multisampling={0}>
+          // flicker source on many GPUs — SMAA covers the edges instead.
+          // keyed on the effect config so pass-level settings (e.g. AO
+          // resolution) rebuild cleanly instead of mutating live passes
+          <EffectComposer key={`fx_${glEpoch}_${q.ao}_${q.bloom ? 1 : 0}`} multisampling={0}>
             {[
               ...(q.ao !== 'off'
                 ? [<N8AO key="ao" aoRadius={0.35} intensity={3} halfRes={q.ao === 'half'} />]

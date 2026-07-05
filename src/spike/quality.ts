@@ -121,6 +121,9 @@ interface QualityState {
   overrides: Partial<QualityFlags>
   /** allow the FPS governor to lower the preset on sustained low FPS */
   autoAdjust: boolean
+  /** session-only: ?quality= pinned this run, so the governor stands down
+   *  (not persisted — a one-off A/B run must not disable it forever) */
+  pinned: boolean
   /** one-shot user-facing message (e.g. "quality lowered"), cleared by UI */
   notice: string | null
   setPreset: (preset: QualityPreset) => void
@@ -136,6 +139,7 @@ export const useQuality = create<QualityState>()(
       preset: detectPreset(),
       overrides: {},
       autoAdjust: true,
+      pinned: false,
       notice: null,
       setPreset: (preset) => set({ preset, overrides: {} }),
       setOverride: (key, value) =>
@@ -166,5 +170,5 @@ export const useFlags = (): QualityFlags =>
 
 // URL param wins over whatever was persisted, and pins the choice for the
 // session (no auto-drop) so ?quality= A/B runs measure what they claim to.
-const pinned = urlPreset()
-if (pinned) useQuality.setState({ preset: pinned, overrides: {}, autoAdjust: false })
+const pinnedPreset = urlPreset()
+if (pinnedPreset) useQuality.setState({ preset: pinnedPreset, overrides: {}, pinned: true })
