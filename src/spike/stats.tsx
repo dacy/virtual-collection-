@@ -34,6 +34,16 @@ export function StatsCollector({ out }: { out: MutableRefObject<SpikeStats> }) {
   const lastVramScan = useRef(0)
   const estTextureMB = useRef(0)
 
+  // the post-processing composer renders several passes per frame and
+  // gl.info auto-resets between them, so only the final blit would be
+  // counted; accumulate across the whole frame and reset manually instead
+  useEffect(() => {
+    gl.info.autoReset = false
+    return () => {
+      gl.info.autoReset = true
+    }
+  }, [gl])
+
   useFrame(() => {
     const now = performance.now()
     const dt = now - last.current
@@ -55,12 +65,14 @@ export function StatsCollector({ out }: { out: MutableRefObject<SpikeStats> }) {
     out.current = {
       fps: 1000 / avg,
       onePercentLowFps: 1000 / worstAvg,
+      // accumulated totals from the previous frame (all passes)
       drawCalls: gl.info.render.calls,
       triangles: gl.info.render.triangles,
       textureCount: gl.info.memory.textures,
       geometryCount: gl.info.memory.geometries,
       estTextureMB: estTextureMB.current,
     }
+    gl.info.reset()
   })
   return null
 }
@@ -149,7 +161,7 @@ export function StatsOverlay({
       <div style={{ opacity: 0.55, marginTop: 6, fontSize: 12 }}>
         {isTouch
           ? 'Left half: move · right half: look'
-          : 'Click to walk (WASD + mouse) · aim the dot at a display and click to edit it'}
+          : 'Click to walk (WASD + mouse, Q/E: eye height) · aim the dot at a display and click to edit it'}
       </div>
     </div>
   )

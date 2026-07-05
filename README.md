@@ -43,6 +43,29 @@ Useful variations while measuring:
 
 - `?tex=1024` — halves texture memory (the first mitigation on the list).
 - `?pieces=10` — half population, to find where the budget breaks.
+- `?quality=low|medium|high|ultra` — pin a graphics preset for an A/B run
+  (pinning also disables the automatic FPS-based step-down for that session).
+
+### Graphics quality
+
+The gallery scales from integrated graphics to gaming PCs. The **⚙ Graphics**
+panel (bottom right) picks a preset — Low, Medium, High, Ultra — and exposes
+each feature individually: sun shadows, ambient occlusion, bloom, realistic
+refractive glass, planar floor reflections, light shafts, dust motes, and
+render resolution. Presets differ roughly as:
+
+- **Low** — no shadows or post-processing, native-resolution cap 1×. For
+  phones and weak iGPUs.
+- **Medium** — soft sun shadows, light shafts. Still no post stack.
+- **High** (default on desktop) — adds ambient occlusion, bloom, SMAA,
+  refractive vitrine glass.
+- **Ultra** — full-resolution AO, 4K shadow map, and real planar
+  reflections in the marble floor (an extra scene render — expensive).
+
+If the frame rate stays under ~25 fps for a few seconds, the app steps the
+preset down one level and tells you (toggleable: "Auto-lower when slow").
+If the GPU driver resets anyway, the page detects the lost WebGL context,
+shows a recovery overlay, and rebuilds the frame instead of going black.
 
 The stress pieces are procedurally generated stand-ins for photogrammetry
 scans — deterministic, so runs are comparable across devices. Record the
@@ -69,6 +92,13 @@ select it, then use the sliders to rotate it, scale it, or lift it off the
 pedestal. With one of your own pieces selected, click a different pedestal
 to move it there (occupied pedestals swap), or remove it to bring the
 stand-in back. **Done editing** returns to walking.
+
+**Adjusting pedestals:** every display pedestal has its own height, top
+size, and material style (gallery white, charcoal stone, walnut, travertine,
+brushed brass), editable from the same panel. Defaults are deliberately
+varied — tall slim columns lift small pieces to eye level, low wide plinths
+stage big statement pieces — and the glass vitrine resizes to match. While
+walking, **Q/E** lowers/raises your eye height to change the viewing angle.
 
 Spike limitations (the real import pipeline in Phase 3 removes them):
 OBJ/FBX with external texture-map files load untextured; STL gets a neutral

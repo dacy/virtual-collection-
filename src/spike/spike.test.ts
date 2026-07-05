@@ -44,6 +44,60 @@ describe('spike slot layout', async () => {
   })
 })
 
+describe('pedestal display defaults', async () => {
+  const {
+    DEFAULT_PEDESTALS_BY_INDEX,
+    EYE_HEIGHT,
+    PEDESTAL_HEIGHT_RANGE,
+    PEDESTAL_SIZE_RANGE,
+    PEDESTAL_SLOTS,
+    SLOTS,
+    fitBoxFor,
+    pedestalColliders,
+    pedestalTopFor,
+  } = await import('./layout')
+
+  const configs = SLOTS.flatMap((s, i) =>
+    s.kind === 'pedestal' ? [DEFAULT_PEDESTALS_BY_INDEX[i]] : [],
+  )
+
+  it('every pedestal slot has a default config within the editor ranges', () => {
+    expect(configs).toHaveLength(PEDESTAL_SLOTS.length)
+    for (const c of configs) {
+      expect(c).toBeDefined()
+      expect(c.height).toBeGreaterThanOrEqual(PEDESTAL_HEIGHT_RANGE[0])
+      expect(c.height).toBeLessThanOrEqual(PEDESTAL_HEIGHT_RANGE[1])
+      expect(c.size).toBeGreaterThanOrEqual(PEDESTAL_SIZE_RANGE[0])
+      expect(c.size).toBeLessThanOrEqual(PEDESTAL_SIZE_RANGE[1])
+    }
+  })
+
+  it('varies heights and sizes so the room reads dynamic, not uniform', () => {
+    expect(new Set(configs.map((c) => c.height)).size).toBeGreaterThanOrEqual(4)
+    expect(new Set(configs.map((c) => c.size)).size).toBeGreaterThanOrEqual(4)
+    expect(new Set(configs.map((c) => c.style)).size).toBeGreaterThanOrEqual(4)
+  })
+
+  it('puts typical piece centers in a comfortable viewing band near eye level', () => {
+    const centers = configs.map((c) => pedestalTopFor(c) + fitBoxFor(c) / 2)
+    for (const y of centers) {
+      expect(y).toBeGreaterThan(0.95)
+      expect(y).toBeLessThan(EYE_HEIGHT)
+    }
+    // most displays should sit close to eye level (within ~40cm)
+    const nearEye = centers.filter((y) => EYE_HEIGHT - y < 0.4)
+    expect(nearEye.length).toBeGreaterThanOrEqual(configs.length / 2)
+  })
+
+  it('derives a collider from each pedestal config, sized past its footprint', () => {
+    const colliders = pedestalColliders(DEFAULT_PEDESTALS_BY_INDEX)
+    expect(colliders).toHaveLength(PEDESTAL_SLOTS.length)
+    colliders.forEach((c, i) => {
+      expect(c.radius).toBeGreaterThan(configs[i].size / 2)
+    })
+  })
+})
+
 describe('stress piece generation', async () => {
   const { buildPedestalPiece, buildWallPiece } = await import('./pieces')
   const { SLOTS, PEDESTAL, WALL_FIT_BOX } = await import('./room')
